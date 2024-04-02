@@ -47,7 +47,7 @@ init_vars() {
 function check_packages() {
     # install req packages if needed
     msg "${info}Checking if necessary packages are present..."
-    local req_package=("mdadm" "dpkg")
+    local req_package=("mdadm" "dpkg" "util-linux") # for lsblk
     for ((i = 0; i < ${#req_package[@]}; i++)); do
         if [[ ! $(which "${req_package[$i]}") ]]; then
             msg "$warn Command '${req_package[$i]}' not found, will attempt to install..."
@@ -61,8 +61,41 @@ function check_packages() {
 
 scan_drives() {   # enum through connected blk storage, return count
     msg "${info} Scanning attached HDD devices..."
-    mapfile -t drives < <(lsblk -d -o name | tail -n +2 | sort)
+    mapfile -t drives < <(lsblk -d -o name | tail -n +2 | sort)     # todo: better way that lsblk?
     msg "${info} Total drives detected: ${#drives[@]}"
+}
+
+get_user_input() {          #todo: tweak to allow for single key w/o enter
+    local max_len="$1"
+    local prompt="$2"
+    local input_var="$3"
+    local _input
+    local _count=0
+
+    stty erase '^?'
+
+    echo -n "${prompt}"
+    while IFS= read -r -s -n 1 _char; do
+        [[ -z $_char ]] && {
+                         printf '\n'             # Enter - finish input
+                                      break
+        }
+        if [[ $_char == $'\177' ]]; then # Backspace was pressed
+            if [[ $_count -gt 0 ]]; then
+                _count=$((_count - 1))
+                _input="${_input%?}"
+                printf "\b \b" # Move cursor back and clear last character
+            fi
+        else
+            if [[ $_count -lt $max_len ]]; then
+                printf "%s" "$_char" # Print character
+                _input+=$_char
+                _count=$((_count + 1))
+            fi
+        fi
+    done
+    _input="${_input//\'/\'\\\'\'}"  # escape single quote chars
+    eval "$input_var"="'$_input'"
 }
 
 # main thread
@@ -78,31 +111,30 @@ function main() {
     msg "${sp}"
     scan_drives
     msg "${sp}"
+        # build a string containing sorted drive/blk devices
     local line
     for ((i = 0; i < ${#drives[@]}; i++)); do
         printf -v line "${green}%b${nc}) %s " $((i + 1)) "${drives[i]}"
-        local drive_selection+="${line}"
+        local drives_avail+="${line}"
     done
 
-    msg "${info} Select drives to include in the array (enter: n n n): ${drive_selection}"  # !FIXME: needs new mapfile var
-                                                                                            # TODO: Do we even have have input routine?
-                                                                                            # TODO: Hell no!  Make input function
-    for i in "${drive_selection[@]}"; do
-        # is char[i] a valid int?
-        if ! [[ $i =~ ^[1-9]+$ ]]; then
-            error_exit "${err} ${i} is not a number. Enter only positive whole numbers from 1 to N." 2
+    msg "${info} Select drives to include in the array:"
+    get_user_input 10 "${ask} ${drives_avail}- Input choice as N N N: " response
+
+    chosen_drives=() # Array to store the chosen drives
+    for i in ${response}; do
+        # Check if 'i' is a valid positive integer and within the valid range
+        if ! [[ $i =~ ^[1-9]+$ ]] || ((i < 1 || i > ${#drives[@]})); then
+            error_exit "${err} Invalid value: ${i}. Enter only positive whole numbers from 1 to ${#drives[@]}." 2
         fi
-        # Check if idx is within the valid range
-        if ((i < 1 || i > ${#drives[@]})); then
-            error_exit "$err Invalid value entered. Valid range is 1 - ${#drives[@]}..." 2
-        fi
+        # Add the chosen drive to the chosen_drives array
+        chosen_drives+=("${drives[i - 1]}") # Subtract 1 because the array is 0-indexed
     done
 
     # if were to this point. let's confirm user input before the heaving lifting
-    msg "$info Confirm drive selection: ${drive_selection}"
-    # TODO: Hell no!  Make input function
-    # TODO: Show selected drives to use & get confirmation
-
+    msg "$info Confirm drive selection: ${chosen_drives[*]}"    # !look into alternative device scan, to get path.  Do we need to? or just prepend
+                                                                # !/dev/? can a blk dev exist outside /dev?
+    msg "$ask Correct? y/n"
 }
 
 main "$@"
