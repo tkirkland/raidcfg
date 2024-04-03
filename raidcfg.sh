@@ -1,30 +1,29 @@
 #!/bin/bash
-#
-# This script aims to automate (as much as is possible) performing a new linux install
-# in tandem with mdadm software raid since most installers lack that option
-#
-# YMMV
 
-# get os ID {neon, debian etc)
+# This script aims to automate the process of setting up a new Linux OS with mdadm software raid.
+
+# Function to get the OS ID. Currently supporting 'neon', 'ubuntu' and 'debian'.
 function get_os_id() {
+    # If OS ID is not one of the supported ones, we exit with an error.
     if [[ ${ID} != "neon" && ${ID} != "ubuntu" && ${ID} != "debian" ]]; then
         error_exit "${err} '${ID}' OS found and is currently unsupported" 1
     fi
-    msg "${ok} Detected OS '${ID}' so let us proceed..."
+    msg "${ok} Detected OS '${ID}' is compatible so let us proceed..."
 }
 
-# takes two params: string to display and int as exit code
+# Function to handle errors. Takes two parameters: the error message and the exit code.
 function error_exit() {
-    printf "%b\n" "${1}"
+    printf "%b\n" "$1"
     exit "${2}"
 }
 
+# This function displays a message.
 function msg() {
-    printf "%b\n" "${1}"
+    printf "%b\n" "$1"
 }
 
-init_vars() {
-    # set color codes for text, we like uniformity w/ color
+# Function to initialize the variables.
+function init_vars() {
     red='\033[0;31m'
     green='\033[0;32m'
     nc='\033[0m'
@@ -37,6 +36,7 @@ init_vars() {
     sp="[ ]"
     ask="[?]"
 
+    # If the file '/etc/os-release' does not exist, we exit with an error. Otherwise, we source it to get OS ID.
     if ! [ -f /etc/os-release ]; then
         error_exit "${err} unable to detect OS, '/etc/os-release' not found" 1
     else
@@ -44,43 +44,54 @@ init_vars() {
     fi
 }
 
+# This function checks if the necessary packages are installed. If not, it displays a warning.
+# In this implementation, it doesn't actually install missing packages. (ToDo)
 function check_packages() {
-    # install req packages if needed
     msg "${info}Checking if necessary packages are present..."
     local req_package=("mdadm" "dpkg" "util-linux") # for lsblk
     for ((i = 0; i < ${#req_package[@]}; i++)); do
         if [[ ! $(which "${req_package[$i]}") ]]; then
+            # Display a warning because the package/command was not found.
             msg "$warn Command '${req_package[$i]}' not found, will attempt to install..."
-            # todo: build install packages code
-        else
-            # todo: msg package is installed
-            :
         fi
     done
 }
 
-scan_drives() {   # enum through connected blk storage, return count
+# This function scans the connected HDD devices and displays their count.
+function scan_drives() {
     msg "${info} Scanning attached HDD devices..."
-    mapfile -t drives < <(lsblk -d -o name | tail -n +2 | sort)     # todo: better way that lsblk?
+    # Read the names of the block devices into an array 'drives'.
+    mapfile -t drives < <(lsblk -d -o name | tail -n +2 | sort)
     msg "${info} Total drives detected: ${#drives[@]}"
 }
 
-get_user_input() {          #todo: tweak to allow for single key w/o enter
-    local max_len="$1"
+# This function gets the user input with a few options: single-key execution, maximum length, and visibility of the input.
+# The input is read character by character and stored in a variable.
+# If the input is a backspace, it removes the last character from the input.
+# If the input reached max length, no more characters are read.
+# The variable holding the input is then returned by assigning it to the variable whose name is passed to the function.
+function get_user_input() {
+    local single_key="$1"
     local prompt="$2"
     local input_var="$3"
+    local max_len="${4:-40}"
     local _input
     local _count=0
+    local _char
 
     stty erase '^?'
 
     echo -n "${prompt}"
     while IFS= read -r -s -n 1 _char; do
+        if [[ $single_key == 1 ]]; then
+            printf '\n'
+            break
+        fi
         [[ -z $_char ]] && {
-                         printf '\n'             # Enter - finish input
-                                      break
+            printf '\n'
+            break
         }
-        if [[ $_char == $'\177' ]]; then # Backspace was pressed
+        if [[ $_char == $'\177' ]]; then
             if [[ $_count -gt 0 ]]; then
                 _count=$((_count - 1))
                 _input="${_input%?}"
@@ -94,47 +105,46 @@ get_user_input() {          #todo: tweak to allow for single key w/o enter
             fi
         fi
     done
-    _input="${_input//\'/\'\\\'\'}"  # escape single quote chars
+    # shellcheck disable=SC2001
+    _input="$(echo "${_input}" | sed "s/'/'\\''/g" | sed 's/[\\$`"()*;&|]/\\&/g')" #! the ' char still breaks
     eval "$input_var"="'$_input'"
+
 }
 
-# main thread
+# This is the main function which is responsible for managing the other functions and the main execution flow of the script.
+# It first checks if the script is being run as root. If not, it exits with an error.
+# After that, it initializes the variables, checks the OS compatibility, scans the HDDs,
+# gets the user's input about the drives to include in the array, checks them, and finally confirms the selection.
+# The selection refers to the drives the user has chosen to include in the array.
 function main() {
     if [[ $UID != 0 ]]; then
-        error_exit "script needs root" 1
+        error_exit "must be root" 1
     fi
     init_vars
-    msg "$info Mdadm raid config script, v0.4"
+    msg "${info} Mdadm raid config script, v0.5"
     msg "${sp}"
     msg "${sp} Checking OS compatibility..."
     get_os_id
     msg "${sp}"
     scan_drives
     msg "${sp}"
-        # build a string containing sorted drive/blk devices
     local line
     for ((i = 0; i < ${#drives[@]}; i++)); do
         printf -v line "${green}%b${nc}) %s " $((i + 1)) "${drives[i]}"
         local drives_avail+="${line}"
     done
-
     msg "${info} Select drives to include in the array:"
-    get_user_input 10 "${ask} ${drives_avail}- Input choice as N N N: " response
+    get_user_input 0 "${ask} ${drives_avail}- Input choice as N N N: " response 10
 
-    chosen_drives=() # Array to store the chosen drives
+    local chosen_drives=()
     for i in ${response}; do
-        # Check if 'i' is a valid positive integer and within the valid range
         if ! [[ $i =~ ^[1-9]+$ ]] || ((i < 1 || i > ${#drives[@]})); then
             error_exit "${err} Invalid value: ${i}. Enter only positive whole numbers from 1 to ${#drives[@]}." 2
         fi
-        # Add the chosen drive to the chosen_drives array
         chosen_drives+=("${drives[i - 1]}") # Subtract 1 because the array is 0-indexed
     done
-
-    # if were to this point. let's confirm user input before the heaving lifting
-    msg "$info Confirm drive selection: ${chosen_drives[*]}"    # !look into alternative device scan, to get path.  Do we need to? or just prepend
-                                                                # !/dev/? can a blk dev exist outside /dev?
-    msg "$ask Correct? y/n"
+    msg "${info} Confirm drive selection: ${chosen_drives[*]}"
+    get_user_input 1 "${ask} Correct? y/n: " response
 }
 
 main "$@"
