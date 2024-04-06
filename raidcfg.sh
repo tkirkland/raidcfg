@@ -36,12 +36,6 @@ function init_vars() {
     sp="[ ]"
     ask="[?]"
 
-    # If the file '/etc/os-release' does not exist, we exit with an error. Otherwise, we source it to get OS ID.
-    if ! [ -f /etc/os-release ]; then
-        error_exit "${err} unable to detect OS, '/etc/os-release' not found" 1
-    else
-        . /etc/os-release
-    fi
 }
 
 # This function checks if the necessary packages are installed. If not, it displays a warning.
@@ -83,16 +77,15 @@ function get_user_input() {
     local _input
     local _count=0
     local _char
-    input_valid=0
 
     stty erase '^?'
 
     echo -n "${prompt}"
-    while IFS= read -r -s -n 1 _char; do  #!FIX Single char input not echoing or being returned
-        if [[ $single_key == 1 ]]; then
-            _input+=$_char
-            printf '\n'
-        break
+    while IFS= read -r -s -n 1 _char; do
+        if [[ ${single_key} == 1 ]]; then
+            _input+=${_char}
+            printf '%s\n' "${_char}"
+            break
         fi
         [[ -z $_char ]] && {
             printf '\n'
@@ -113,12 +106,10 @@ function get_user_input() {
         fi
     done
 
-
-
     # Check if use^[a-zA-Z0-9 ]+$r input is valid, in this case, only alphanumeric
 
-    if [[ ! "${_input}" =~  ^[a-zA-Z0-9][a-zA-Z0-9\ ]*$ ]]; then
-    msg "Invalid entry... Only use alphanumeric characters."
+    if [[ ! ${_input} =~ ^[a-zA-Z0-9][a-zA-Z0-9\ ]*$    ]]; then
+        msg "Invalid entry... Only use alphanumeric characters."
     else
         # shellcheck disable=SC2001
         _input="$(echo "${_input}" | sed "s/'/'\\\\''/g; s/[\\\$\"()*;&|]/\\\\&/g")"
@@ -132,10 +123,19 @@ function get_user_input() {
 # If the ins input about the drives to include in the array, checks them, and finally confirms the selection.
 # The selection refers to the drives the user has chosen to include in the array.
 function main() {
-    if [[ $UID != 0 ]]; then
-        error_exit "must be root" 1
-    fi
     init_vars
+    if [ "$EUID" -ne 0 ]; then
+        echo "${info} Needs root... attempting."
+        msg "${sp}"
+        sudo "$0" "$@"
+        error_exit "${err} Failed to obtain root, exiting!" 1
+    fi
+    # If the file '/etc/os-release' does not exist, we exit with an error. Otherwise, we source it to get OS ID.
+    if ! [ -f /etc/os-release ]; then
+        error_exit "${err} Failed to detect compatible OS, '/etc/os-release' not found." 1
+    else
+        . /etc/os-release
+    fi
     msg "${info} Mdadm raid config script, v0.5"
     msg "${sp}"
     msg "${sp} Checking OS compatibility..."
@@ -153,8 +153,14 @@ function main() {
         fi
         chosen_drives+=("${drives[i - 1]}") # Subtract 1 because the array is 0-indexed
     done
+    msg "${sp}"
     msg "${info} Confirm drive selection: ${chosen_drives[*]}"
+    msg "${sp}"
     get_user_input 1 "${ask} Correct? y/n: " response
+    if ! [[ ${response} == "y" ]]; then
+        error_exit "${err} Rerun the script to start over." 1
+    fi
+    # Let's get to work...
 }
 
 main "$@"
