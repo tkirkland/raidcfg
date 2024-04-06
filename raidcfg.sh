@@ -52,17 +52,22 @@ function check_packages() {
     for ((i = 0; i < ${#req_package[@]}; i++)); do
         if [[ ! $(which "${req_package[$i]}") ]]; then
             # Display a warning because the package/command was not found.
-            msg "$warn Command '${req_package[$i]}' not found, will attempt to install..."
+            msg "${warn} Command '${req_package[$i]}' not found, will attempt to install..."
         fi
     done
 }
 
 # This function scans the connected HDD devices and displays their count.
 function scan_drives() {
-    msg "${info} Scanning attached HDD devices..."
+    msg "${info} Scanning attached HDD devices... "
     # Read the names of the block devices into an array 'drives'.
     mapfile -t drives < <(lsblk -d -o name | tail -n +2 | sort)
-    msg "${info} Total drives detected: ${#drives[@]}"
+    local line
+    for ((i = 0; i < ${#drives[@]}; i++)); do
+        printf -v line "${green}%b${nc}) %s " $((i + 1)) "${drives[i]}"
+        drives_avail+="${line}"
+    done
+    msg "${info} ${#drives[@]} drives detected."
 }
 
 # This function gets the user input with a few options: single-key execution, maximum length, and visibility of the input.
@@ -78,14 +83,16 @@ function get_user_input() {
     local _input
     local _count=0
     local _char
+    input_valid=0
 
     stty erase '^?'
 
     echo -n "${prompt}"
-    while IFS= read -r -s -n 1 _char; do
+    while IFS= read -r -s -n 1 _char; do  #!FIX Single char input not echoing or being returned
         if [[ $single_key == 1 ]]; then
+            _input+=$_char
             printf '\n'
-            break
+        break
         fi
         [[ -z $_char ]] && {
             printf '\n'
@@ -105,16 +112,24 @@ function get_user_input() {
             fi
         fi
     done
-    # shellcheck disable=SC2001
-    _input="$(echo "${_input}" | sed "s/'/'\\''/g" | sed 's/[\\$`"()*;&|]/\\&/g')" #! the ' char still breaks
-    eval "$input_var"="'$_input'"
 
+
+
+    # Check if use^[a-zA-Z0-9 ]+$r input is valid, in this case, only alphanumeric
+
+    if [[ ! "${_input}" =~  ^[a-zA-Z0-9][a-zA-Z0-9\ ]*$ ]]; then
+    msg "Invalid entry... Only use alphanumeric characters."
+    else
+        # shellcheck disable=SC2001
+        _input="$(echo "${_input}" | sed "s/'/'\\\\''/g; s/[\\\$\"()*;&|]/\\\\&/g")"
+        eval "$input_var"="'$_input'"
+    fi
 }
-
 # This is the main function which is responsible for managing the other functions and the main execution flow of the script.
 # It first checks if the script is being run as root. If not, it exits with an error.
 # After that, it initializes the variables, checks the OS compatibility, scans the HDDs,
-# gets the user's input about the drives to include in the array, checks them, and finally confirms the selection.
+# gets the user's is read character by character and stored in a variable.
+# If the ins input about the drives to include in the array, checks them, and finally confirms the selection.
 # The selection refers to the drives the user has chosen to include in the array.
 function main() {
     if [[ $UID != 0 ]]; then
@@ -128,18 +143,13 @@ function main() {
     msg "${sp}"
     scan_drives
     msg "${sp}"
-    local line
-    for ((i = 0; i < ${#drives[@]}; i++)); do
-        printf -v line "${green}%b${nc}) %s " $((i + 1)) "${drives[i]}"
-        local drives_avail+="${line}"
-    done
-    msg "${info} Select drives to include in the array:"
-    get_user_input 0 "${ask} ${drives_avail}- Input choice as N N N: " response 10
+    msg "${info} Select drives (1-${#drives[@]}) space-delimited to use."
+    get_user_input 0 "${ask} ${drives_avail}:" response 10
 
     local chosen_drives=()
     for i in ${response}; do
         if ! [[ $i =~ ^[1-9]+$ ]] || ((i < 1 || i > ${#drives[@]})); then
-            error_exit "${err} Invalid value: ${i}. Enter only positive whole numbers from 1 to ${#drives[@]}." 2
+            error_exit "${err} Invalid value: ${i}. Only 1 to ${#drives[@]} is valid." 2
         fi
         chosen_drives+=("${drives[i - 1]}") # Subtract 1 because the array is 0-indexed
     done
