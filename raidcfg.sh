@@ -4,6 +4,13 @@
 
 # Function to get the OS ID. Currently supporting 'neon', 'ubuntu' and 'debian'.
 function get_os_id() {
+    # If the file '/etc/os-release' does not exist, we exit with an error. Otherwise, we source it to get OS ID.
+    if ! [ -f /etc/os-release ]; then
+        error_exit "${err} Failed to detect compatible OS, '/etc/os-release' not found." 1
+    else
+        msg "${info} Checking OS compatibility..."
+        . /etc/os-release
+    fi
     # If OS ID is not one of the supported ones, we exit with an error.
     if [[ ${ID} != "neon" && ${ID} != "ubuntu" && ${ID} != "debian" ]]; then
         error_exit "${err} '${ID}' OS found and is currently unsupported" 1
@@ -42,7 +49,6 @@ function check_install_reqs() {
     local package_name=""
     local installation_status=0
     declare -A cmd_to_package=(["lsblk"]="util-linux" ["dpkg"]="dpkg" ["mdadm"]="mdadm")    # if later we add other os compatibility
-    msg "${sp}"
     if ! command -v apt-get &>/dev/null; then                                               # we can adjust packages here
         error_exit "${err} 'apt-get' command not found. This script requires 'apt-get' to be installed." 1
     fi
@@ -56,14 +62,14 @@ function check_install_reqs() {
                 msg "${sp}"
             fi
         else
-            msg "${info} Shell command '${cmd}' found."
+            msg "${ok} Shell command '${cmd}' found."
             msg "${sp}"
         fi
     done
     if ! [[ ${installation_status} ]]; then
-        error_exit "${err} An error occurred installing prerequisites. See \'error.log\' in ${PWD}" 1
+        error_exit "${err} An error occurred installing prerequisites. See 'error.log' in ${PWD}" 1
     fi
-    msg "${ok} No reported errors during package install."
+    msg "${info} No reported errors during package install."
 }
 
 # This function scans the connected HDD devices and displays their count.
@@ -146,18 +152,13 @@ function main() {
         exec sudo "$0" "$@"
         error_exit "${err} Failed to gain root. Exiting." 1
     fi
-    # If the file '/etc/os-release' does not exist, we exit with an error. Otherwise, we source it to get OS ID.
-    if ! [ -f /etc/os-release ]; then
-        error_exit "${err} Failed to detect compatible OS, '/etc/os-release' not found." 1
-    else
-        . /etc/os-release
-    fi
     msg "${ok} Super cow powers activated!"
     msg "${sp}"
     msg "${info} Mdadm raid config script, v0.5"
     msg "${sp}"
-    msg "${sp} Checking OS compatibility..."
     get_os_id
+    msg "${sp}"
+    check_install_reqs
     msg "${sp}"
     scan_drives
     msg "${sp}"
@@ -179,7 +180,6 @@ function main() {
         error_exit "${err} Rerun the script to start over." 1
     fi
     # Let's get to work...
-    check_install_reqs
     exit 0
 }
 
