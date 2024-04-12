@@ -32,8 +32,8 @@ function msg() {
 # Function to initialize the variables.
 function init_vars() {
     local red='\033[0;31m'
-    local green='\033[0;32m'
-    local nc='\033[0m'
+    green='\033[0;32m'
+    nc='\033[0m'
     local yellow='\033[0;33m'
 
     info="[i]"
@@ -73,16 +73,22 @@ function check_install_reqs() {
 }
 
 # This function scans the connected HDD devices and displays their count.
+# shellcheck disable=SC2155
+# The scan_drives function scans all attached HDD devices.
 function scan_drives() {
-    msg "${info} Scanning attached HDD devices... "
-    # Read the names of the block devices into an array 'drives'.
-    mapfile -t drives < <(lsblk -d -o name | tail -n +2 | sort)
-    local line
-    for ((i = 0; i < ${#drives[@]}; i++)); do
-        printf -v line "[%b]) %s " $((i + 1)) "${drives[i]}"
-        drives_avail+="${line}"
+    local dev_name
+    local device
+    local full_path
+    drives_avail=()
+    msg "${info} Scanning attached block storage devices... "
+    for device in /sys/block/*; do
+        dev_name=$(basename "${device}")
+        if [ -d "$device/device" ]; then
+            full_path="/dev/${dev_name}"
+            drives_avail+=("${full_path}")
+        fi
     done
-    msg "${info} ${#drives[@]} drives detected."
+    msg "${info} ${#drives_avail[@]} drives detected."
 }
 
 # This function gets the user input with a few options: single-key execution, maximum length, and visibility of the input.
@@ -101,8 +107,12 @@ function get_user_input() {
 
     stty erase '^?'
 
-    echo -n "${prompt}"
+    printf "%b" "${prompt}"
     while IFS= read -r -s -n 1 _char; do
+    # If the character is not 0-9, a-z, A-Z or a space
+        if [[ ! $_char =~ [0-9a-zA-Z[:space:]$'033'] ]]; then  #TODO needs fixed
+            continue
+        fi
         if [[ ${single_key} == 1 ]]; then
             _input+=${_char}
             printf '%s\n' "${_char}"
@@ -126,16 +136,7 @@ function get_user_input() {
             fi
         fi
     done
-
-    # Check if use^[a-zA-Z0-9 ]+$r input is valid, in this case, only alphanumeric
-
-    if [[ ! ${_input} =~ ^[a-zA-Z0-9][a-zA-Z0-9\ ]*$ ]]; then
-        msg "Invalid entry... Only use alphanumeric characters."
-    else
-        # shellcheck disable=SC2001
-        _input="$(echo "${_input}" | sed "s/'/'\\\\''/g; s/[\\\$\"()*;&|]/\\\\&/g")"
-        eval "$input_var"="'$_input'"
-    fi
+    eval "$input_var"="'$_input'"
 }
 # This is the main function which is responsible for managing the other functions and the main execution flow of the script.
 # It first checks if the script is being run as root. If not, it exits with an error.
@@ -144,16 +145,17 @@ function get_user_input() {
 # If the ins input about the drives to include in the array, checks them, and finally confirms the selection.
 # The selection refers to the drives the user has chosen to include in the array.
 function main() {
+    local i
     init_vars
-    if [ "$EUID" -ne 0 ]; then
-        echo "${info} Needs root... attempting."
-        msg "${sp}"
-        # shellcheck disable=SC2093
-        exec sudo "$0" "$@"
-        error_exit "${err} Failed to gain root. Exiting." 1
-    fi
-    msg "${ok} Super cow powers activated!"
-    msg "${sp}"
+    #    if [ "$EUID" -ne 0 ]; then
+    #        echo "${info} Needs root... attempting."
+    #        msg "${sp}"
+    #        # shellcheck disable=SC2093
+    #        exec sudo "$0" "$@"
+    #        error_exit "${err} Failed to gain root. Exiting." 1
+    #    fi
+    #    msg "${ok} Super cow powers activated!"
+    #    msg "${sp}"
     msg "${info} Mdadm raid config script, v0.5"
     msg "${sp}"
     get_os_id
@@ -162,15 +164,19 @@ function main() {
     msg "${sp}"
     scan_drives
     msg "${sp}"
-    msg "${info} Select drives (1-${#drives[@]}) space-delimited to use."
-    get_user_input 0 "${ask} ${drives_avail}:" response 10
+    msg "${info} Select drives (1-${#drives_avail[@]}) space-delimited to use."
 
+    get_user_input 0 "${info} $(
+        for i in "${!drives_avail[@]}"; do
+            printf "${green}%d${nc}) %s " "$((i + 1))" "${drives_avail[$i]}"
+        done
+    )\n${ask} 1-${#drives_avail[@]}: " response 10
     local chosen_drives=()
     for i in ${response}; do
-        if ! [[ $i =~ ^[1-9]+$ ]] || ((i < 1 || i > ${#drives[@]})); then
-            error_exit "${err} Invalid value: ${i}. Only 1 to ${#drives[@]} accepted." 2
+        if ! [[ $i =~ ^[1-9]+$ ]] || ((i < 1 || i > ${#drives_avail[@]})); then
+            error_exit "${err} Invalid value: ${i}. Only 1 to ${#drives_avail[@]} accepted." 2
         fi
-        chosen_drives+=("${drives[i - 1]}") # Subtract 1 because the array is 0-indexed
+        chosen_drives+=("${drives_avail[i - 1]}") # Subtract 1 because the array is 0-indexed
     done
     msg "${sp}"
     msg "${info} Confirm drive selection: ${chosen_drives[*]}"
