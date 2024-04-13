@@ -43,7 +43,6 @@ function init_vars() {
     sp="[ ]"
     ask="[?]"
 }
-
 function check_install_reqs() {
     local _cmd
     local package_name=""
