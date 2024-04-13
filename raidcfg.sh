@@ -45,32 +45,43 @@ function init_vars() {
 }
 
 function check_install_reqs() {
-    local cmd=""
+    local _cmd
     local package_name=""
     local installation_status=0
-    declare -A cmd_to_package=(["lsblk"]="util-linux" ["dpkg"]="dpkg" ["mdadm"]="mdadm")    # if later we add other os compatibility
-    if ! command -v apt-get &>/dev/null; then                                               # we can adjust packages here
-        error_exit "${err} 'apt-get' command not found. This script requires 'apt-get' to be installed." 1
+    local _installs=0
+    declare -A cmd_to_package=(["dpkg"]="dpkg" ["mdadm"]="mdadm")    # if later we add other os compatibility
+    if ! command -v apt-get &>/dev/null; then                        # we can adjust packages here
+        error_exit "${err} Command 'apt-get' not found but is required." 1
     fi
-    for cmd in "${!cmd_to_package[@]}"; do
-        package_name="${cmd_to_package[$cmd]}"
-        if ! command -v "$cmd" &>/dev/null; then
-            msg "${warn} Missing '${cmd}' command. Attempting install of package."
-            if ! apt-get install -y "$package_name" >/dev/null 2>>error.log; then
+    for _cmd in "${!cmd_to_package[@]}"; do
+        package_name="${cmd_to_package[$_cmd]}"
+        if ! command -v "$_cmd" &>/dev/null; then
+            msg "${warn} Missing '${_cmd}' command. Attempting install of package."
+            if apt-get install -y "$package_name" >/dev/null 2>>error.log; then
+                _installs=1
+            else
                 installation_status=1
                 msg "${err} Failed to install package '${package_name}'."
                 msg "${sp}"
             fi
         else
-            msg "${ok} Shell command '${cmd}' found."
+            msg "${ok} Shell command '${_cmd}' already installed."
             msg "${sp}"
         fi
     done
-    if ! [[ ${installation_status} ]]; then
-        error_exit "${err} An error occurred installing prerequisites. See 'error.log' in ${PWD}" 1
+    if [[ ${installation_status} -eq 1 ]]; then
+        if [[ ${_installs} -eq 1 ]]; then
+            error_exit "${warn} Some packages were not installed successfully. See 'error.log' in ${PWD}" 1
+        else
+            error_exit "${err} An error occurred installing prerequisites. See 'error.log' in ${PWD}" 1
+        fi
+    elif [[ ${_installs} -eq 0 ]]; then
+        msg "${info} All necessary packages were already installed."
+    else
+        msg "${info} All necessary packages have been successfully installed."
     fi
-    msg "${info} No reported errors during package install."
 }
+
 
 # This function scans the connected HDD devices and displays their count.
 # shellcheck disable=SC2155
@@ -101,43 +112,52 @@ function get_user_input() {
     local prompt="$2"
     local input_var="$3"
     local max_len="${4:-40}"
-    local _input
+    local _input=""
     local _count=0
     local _char
 
     stty erase '^?'
 
-    printf "%b" "${prompt}"
+    trap 'error_exit "\n${sp}\n${err} Interrupt received from user." 255' SIGINT
+    echo -n "${prompt}"
     while IFS= read -r -s -n 1 _char; do
-    # If the character is not 0-9, a-z, A-Z or a space
-        if [[ ! $_char =~ [0-9a-zA-Z[:space:]$'033'] ]]; then  #TODO needs fixed
-            continue
-        fi
+        local ord
+        ord=$(printf '%d' "'${_char}")  # Get ASCII numerical value of character
+
         if [[ ${single_key} == 1 ]]; then
-            _input+=${_char}
-            printf '%s\n' "${_char}"
-            break
+            if [[ $ord -ge 32 && $ord -le 126 ]]; then
+                _input+="${_char}"
+                printf '%s\n' "${_char}"
+                break
+            fi
         fi
-        [[ -z $_char ]] && {
+
+        [[ -z ${_char} ]] && {
             printf '\n'
             break
         }
-        if [[ $_char == $'\177' ]]; then
+
+        if [[ ${_char} == $'\177' ]]; then
             if [[ $_count -gt 0 ]]; then
                 _count=$((_count - 1))
                 _input="${_input%?}"
                 printf "\b \b" # Move cursor back and clear last character
             fi
         else
-            if [[ $_count -lt $max_len ]]; then
+            # Ignore up and down arrow keys
+            if [[ $_char == $'\033' ]]; then
+                read -r -s -n 2 -t 0.0001
+            elif [[ $_count -lt $max_len && $ord -ge 32 && $ord -le 126 ]]; then
                 printf "%s" "$_char" # Print character
-                _input+=$_char
+                _input+="${_char}"
                 _count=$((_count + 1))
             fi
         fi
     done
-    eval "$input_var"="'$_input'"
+
+    eval "$input_var=\"$_input\""
 }
+
 # This is the main function which is responsible for managing the other functions and the main execution flow of the script.
 # It first checks if the script is being run as root. If not, it exits with an error.
 # After that, it initializes the variables, checks the OS compatibility, scans the HDDs,
@@ -147,15 +167,15 @@ function get_user_input() {
 function main() {
     local i
     init_vars
-    #    if [ "$EUID" -ne 0 ]; then
-    #        echo "${info} Needs root... attempting."
-    #        msg "${sp}"
-    #        # shellcheck disable=SC2093
-    #        exec sudo "$0" "$@"
-    #        error_exit "${err} Failed to gain root. Exiting." 1
-    #    fi
-    #    msg "${ok} Super cow powers activated!"
-    #    msg "${sp}"
+        if [ "$EUID" -ne 0 ]; then
+            echo "${info} Needs root... attempting."
+            msg "${sp}"
+            # shellcheck disable=SC2093
+            exec sudo "$0" "$@"
+            error_exit "${err} Failed to gain root. Exiting." 1
+        fi
+        msg "${ok} Super cow powers activated!"
+        msg "${sp}"
     msg "${info} Mdadm raid config script, v0.5"
     msg "${sp}"
     get_os_id
@@ -164,20 +184,20 @@ function main() {
     msg "${sp}"
     scan_drives
     msg "${sp}"
-    msg "${info} Select drives (1-${#drives_avail[@]}) space-delimited to use."
-
-    get_user_input 0 "${info} $(
-        for i in "${!drives_avail[@]}"; do
-            printf "${green}%d${nc}) %s " "$((i + 1))" "${drives_avail[$i]}"
-        done
-    )\n${ask} 1-${#drives_avail[@]}: " response 10
+    msg "${info} Available devices: $(for i in "${!drives_avail[@]}";
+                                        do printf "${green}%d${nc}) %s " "$((i + 1))" "${drives_avail[$i]}";
+                                        done)"
+    get_user_input 0 "${ask} Select drives (1-${#drives_avail[@]}) space-delimited to use: " response 10
     local chosen_drives=()
     for i in ${response}; do
         if ! [[ $i =~ ^[1-9]+$ ]] || ((i < 1 || i > ${#drives_avail[@]})); then
-            error_exit "${err} Invalid value: ${i}. Only 1 to ${#drives_avail[@]} accepted." 2
+            error_exit "${err} Invalid input '${i}'. Only 1 to ${#drives_avail[@]} accepted." 2
         fi
         chosen_drives+=("${drives_avail[i - 1]}") # Subtract 1 because the array is 0-indexed
     done
+    if [ -z "${chosen_drives[*]}" ]; then
+        error_exit "${sp}\n${err} No selections made. Terminating." 1
+    fi
     msg "${sp}"
     msg "${info} Confirm drive selection: ${chosen_drives[*]}"
     msg "${sp}"
