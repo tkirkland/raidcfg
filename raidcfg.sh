@@ -95,6 +95,10 @@ function scan_drives() {
         dev_name=$(basename "${device}")
         if [ -d "$device/device" ]; then
             full_path="/dev/${dev_name}"
+            # Check if the device is writable
+            if [ -w "${full_path}" ]; then
+                drives_avail+=("${full_path}")
+            fi
             drives_avail+=("${full_path}")
         fi
     done
