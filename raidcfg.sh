@@ -93,16 +93,19 @@ function scan_drives() {
     msg "${info} Scanning attached block storage devices... "
     for device in /sys/block/*; do
         dev_name=$(basename "${device}")
+        # If the device is removable or a CD drive, skip it
+        if [[ $(cat "${device}/removable") == "1" || ${dev_name} == sr* ]]; then
+            continue
+        fi
         if [ -d "$device/device" ]; then
             full_path="/dev/${dev_name}"
             # Check if the device is writable
             if [ -w "${full_path}" ]; then
                 drives_avail+=("${full_path}")
             fi
-            drives_avail+=("${full_path}")
         fi
     done
-    msg "${info} ${#drives_avail[@]} drives detected."
+    msg "${info} ${#drives_avail[@]} writable drives detected."
 }
 
 # This function gets the user input with a few options: single-key execution, maximum length, and visibility of the input.
