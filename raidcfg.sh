@@ -42,6 +42,7 @@ function init_vars() {
     warn="[${yellow}W${nc}]"
     sp="[ ]"
     ask="[?]"
+    [ -d /sys/firmware/efi ] && _bios=1 || _bios=0
 }
 function check_install_reqs() {
     local _cmd
@@ -80,7 +81,6 @@ function check_install_reqs() {
         msg "${info} All necessary packages have been successfully installed."
     fi
 }
-
 
 # This function scans the connected HDD devices and displays their count.
 # shellcheck disable=SC2155
@@ -125,7 +125,7 @@ function get_user_input() {
     stty erase '^?'
 
     trap 'error_exit "\n${sp}\n${err} Interrupt received from user." 255' SIGINT
-    echo -n "${prompt}"
+    printf "%b " "${prompt}"
     while IFS= read -r -s -n 1 _char; do
         local ord
         ord=$(printf '%d' "'${_char}")  # Get ASCII numerical value of character
@@ -179,7 +179,7 @@ function main() {
             # shellcheck disable=SC2093
             exec sudo "$0" "$@"
             error_exit "${err} Failed to gain root. Exiting." 1
-        fi
+    fi
         msg "${ok} Super cow powers activated!"
         msg "${sp}"
     msg "${info} Mdadm raid config script, v0.5"
@@ -190,9 +190,9 @@ function main() {
     msg "${sp}"
     scan_drives
     msg "${sp}"
-    msg "${info} Available devices: $(for i in "${!drives_avail[@]}";
-                                        do printf "${green}%d${nc}) %s " "$((i + 1))" "${drives_avail[$i]}";
-                                        done)"
+    msg "${info} Available devices: $(for i in "${!drives_avail[@]}"; do
+                                        printf "${green}%d${nc}) %s " "$((i + 1))" "${drives_avail[$i]}"
+    done)"
     get_user_input 0 "${ask} Select drives (1-${#drives_avail[@]}) space-delimited to use: " response 10
     local chosen_drives=()
     for i in ${response}; do
@@ -207,12 +207,19 @@ function main() {
     msg "${sp}"
     msg "${info} Confirm drive selection: ${chosen_drives[*]}"
     msg "${sp}"
-    get_user_input 1 "${ask} Correct? y/n: " response
+    get_user_input 1 "${ask} Correct? y/n:" response
     if ! [[ ${response} == "y" ]]; then
         error_exit "${err} Rerun the script to start over." 1
     fi
     # Let's get to work...
-    exit 0
+    msg "${sp}\n${info} System detected as $(if [[ $_bios -eq 0 ]]; then msg "BIOS/Legacy";
+        else msg "UEFI"; fi) mode. Does this system support legacy (${green}B${nc})IOS"
+    get_user_input 1 "${ask} mode and UEFI or (${green}U${nc})EFI only?" response
+        if [[ $response != "B" && $response != "U" ]]; then
+            error_exit "${err} Invalid input '${response}.'" 2
+        fi
+        msg "${info} Assuming a $(if [[ ${response} == "B" ]]; then msg "BIOS and UEFI";
+        else msg "UEFI only" && _bios=1; fi) configuration."
 }
 
 main "$@"
