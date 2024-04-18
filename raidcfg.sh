@@ -43,6 +43,7 @@ function init_vars() {
     sp="[ ]"
     ask="[?]"
     [ -d /sys/firmware/efi ] && _bios=1 || _bios=0
+    chosen_drives=()
 }
 function check_install_reqs() {
     local _cmd
@@ -85,18 +86,18 @@ function check_install_reqs() {
 # This function scans the connected HDD devices and displays their count.
 # shellcheck disable=SC2155
 # The scan_drives function scans all attached HDD devices.
-function scan_drives() {
+function scan_drives() {   # !! Broken after adding check for removable drives
     local dev_name
     local device
     local full_path
     drives_avail=()
     msg "${info} Scanning attached block storage devices... "
     for device in /sys/block/*; do
-        dev_name=$(basename "${device}")
+        dev_name=$(basename "${drive}")
         # If the device is removable or a CD drive, skip it
-        if [[ $(cat "${device}/removable") == "1" || ${dev_name} == sr* ]]; then
-            continue
-        fi
+#        if [[ $(cat "${drive}/removable") == "1" || ${dev_name} == sr* ]]; then
+#            continue
+#        fi
         if [ -d "$device/device" ]; then
             full_path="/dev/${dev_name}"
             # Check if the device is writable
@@ -105,7 +106,11 @@ function scan_drives() {
             fi
         fi
     done
-    msg "${info} ${#drives_avail[@]} writable drives detected."
+    if [ ${#drives_avail[@]} -lt 1 ]; then
+        error_exit "${err} No drives detected. Cannot continue in this state" 3
+    else
+        msg "${info} ${#drives_avail[@]} writable drives detected."
+    fi
 }
 
 # This function gets the user input with a few options: single-key execution, maximum length, and visibility of the input.
@@ -164,6 +169,26 @@ function get_user_input() {
     eval "$input_var=\"$_input\""
 }
 
+get_device_sizes() {
+    for drive in "${chosen_drives[@]}"
+    do
+        echo "Getting size for device: $drive"
+        # Get device size using kernel methods.
+        if [ -e "/sys/block/${drive##*/}/size" ]; then
+            size=$(cat "/sys/block/${drive##*/}/size")
+            # Convert to GB (Each block is 512 bytes)
+            size_in_gb=$(echo "$size/2/1024/1024" | bc)
+            echo "Size of $drive: $size_in_gb GB (Approx)"
+        # As a fallback, use sgdisk if available.
+        elif command -v sgdisk > /dev/null; then
+            size_in_gb=$(sgdisk -p "$drive" | grep 'Disk size' | awk '{ print $3 " " $4 }')
+            echo "Size of $drive: $size_in_gb"
+        else
+            echo "Cannot determine size for $drive."
+        fi
+    done
+}
+
 # This is the main function which is responsible for managing the other functions and the main execution flow of the script.
 # It first checks if the script is being run as root. If not, it exits with an error.
 # After that, it initializes the variables, checks the OS compatibility, scans the HDDs,
@@ -193,8 +218,7 @@ function main() {
     msg "${info} Available devices: $(for i in "${!drives_avail[@]}"; do
                                         printf "${green}%d${nc}) %s " "$((i + 1))" "${drives_avail[$i]}"
     done)"
-    get_user_input 0 "${ask} Select drives (1-${#drives_avail[@]}) space-delimited to use: " response 10
-    local chosen_drives=()
+    get_user_input 0 "${ask} Select drives (1-${#drives_avail[@]}) space-delimited to use:" response 10
     for i in ${response}; do
         if ! [[ $i =~ ^[1-9]+$ ]] || ((i < 1 || i > ${#drives_avail[@]})); then
             error_exit "${err} Invalid input '${i}'. Only 1 to ${#drives_avail[@]} accepted." 2
@@ -220,6 +244,10 @@ function main() {
         fi
         msg "${info} Assuming a $(if [[ ${response} == "B" ]]; then msg "BIOS and UEFI";
         else msg "UEFI only" && _bios=1; fi) configuration."
+
+    # We're now ready to find drive sizes
+
+    get_device_sizes
 }
 
 main "$@"
